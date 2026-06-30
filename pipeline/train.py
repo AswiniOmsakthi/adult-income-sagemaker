@@ -15,9 +15,26 @@ def model_fn(model_dir):
 
 def input_fn(request_body, request_content_type):
     import io
+    import json
+
     if request_content_type == "text/csv":
         df = pd.read_csv(io.StringIO(request_body), header=None)
         return df.values
+
+    elif request_content_type == "application/json":
+        data = json.loads(request_body)
+
+        # Supports: {"instances": [[39,13,40,2174,0,1,0]]}
+        if "instances" in data:
+            return pd.DataFrame(data["instances"]).values
+
+        # Also supports: {"age":39, "education_num":13, ...} (single record)
+        elif isinstance(data, dict):
+            return pd.DataFrame([data]).values
+
+        else:
+            raise ValueError("JSON must contain 'instances' key or be a flat dict")
+
     else:
         raise ValueError(f"Unsupported content type: {request_content_type}")
 
@@ -28,11 +45,20 @@ def predict_fn(input_data, model):
 
 def output_fn(prediction, content_type):
     import io
+    import json
     import numpy as np
-    output = io.StringIO()
-    for p in np.atleast_1d(prediction):
-        output.write(f"{p}\n")
-    return output.getvalue()
+
+    preds = np.atleast_1d(prediction).tolist()
+
+    if content_type == "application/json":
+        return json.dumps({"predictions": preds})
+
+    else:
+        # Default to CSV-style plain text output
+        output = io.StringIO()
+        for p in preds:
+            output.write(f"{p}\n")
+        return output.getvalue()
 
 
 # ─── Training Entry Point ───────────────────────────────────
