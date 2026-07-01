@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  create-sagemaker-studio:
+  cdk-deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,9 +19,18 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Setup Node.js (required for CDK CLI)
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Install CDK Python Dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -r cdk/requirements.txt
           pip install boto3
 
       - name: Configure AWS Credentials
@@ -31,19 +40,36 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Create SageMaker Studio
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+      - name: CDK Bootstrap (one-time per account/region)
         run: |
-          python infra/create_studio.py
+          cd cdk
+          cdk bootstrap aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ secrets.AWS_REGION }} || true
 
-      - name: Setup Auto Deploy Trigger
+      - name: CDK Diff (show what will change)
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          python infra/setup_eventbridge.py
+          cd cdk
+          cdk diff AdultIncomeSageMakerStack || true
+
+      - name: CDK Deploy
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          cd cdk
+          cdk deploy AdultIncomeSageMakerStack \
+            --require-approval never \
+            --outputs-file ../cdk_outputs.json
+
+      - name: Save CDK Outputs to S3
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          python cdk/save_outputs.py
 
       - name: Show Infra Outputs
         run: |
-          echo "✅ Infrastructure outputs:"
+          echo "CDK Stack Outputs:"
+          cat cdk_outputs.json
+          echo "Saved to S3:"
           cat infra_outputs.json
