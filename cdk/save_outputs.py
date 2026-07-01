@@ -1,6 +1,6 @@
 """
 Reads CloudFormation stack outputs after cdk deploy
-and saves them to S3 as infra_outputs.json
+and saves them to S3 as infra_outputs.json 
 (so Pipeline 2 can read them the same way as before)
 """
 import boto3
