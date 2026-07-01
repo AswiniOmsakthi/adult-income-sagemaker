@@ -75,7 +75,7 @@ class AdultIncomeSageMakerStack(Stack):
         # ─── 3. SageMaker Studio Domain ─────────────────────
         domain = sagemaker.CfnDomain(
             self, "StudioDomain",
-            domain_name="adult-income-sagemaker-studio",
+            domain_name="adult-income-sagemaker-studio-cdk",
             auth_mode="IAM",
             default_user_settings=sagemaker.CfnDomain.UserSettingsProperty(
                 execution_role=sagemaker_role.role_arn,
