@@ -1,58 +1,79 @@
 # Adult Income Prediction — End-to-End MLOps Pipeline on AWS SageMaker
 
-A fully automated, CI/CD-driven MLOps pipeline built on Amazon SageMaker, GitHub Actions, and EventBridge. Predicts whether an individual's income exceeds $50K/year using the [UCI Adult Income dataset](https://archive.ics.uci.edu/dataset/2/adult).
+A fully automated, CI/CD-driven MLOps pipeline that trains a machine learning model to predict whether a person earns more than $50,000/year, then deploys it to a live prediction endpoint — all triggered from a single `git push`, with infrastructure managed by AWS CDK.
 
-This project demonstrates a complete, cost-optimized MLOps workflow — from infrastructure provisioning to model training, evaluation, approval-gated registration, and automatic deployment — using only GitHub Actions and AWS, with zero manual console steps required after initial setup.
+Built with **AWS SageMaker**, **AWS CDK (Python)**, **GitHub Actions**, **EventBridge**, and **Lambda**.
 
 ---
 
-## Architecture Overview
+## What This Project Does (In Plain English)
+
+Imagine you push code to GitHub. Without touching the AWS console, the following happens automatically:
+
+1. **Infrastructure is built** — a SageMaker Studio workspace, storage bucket, security roles, and an event-listener are all created in AWS.
+2. **A model is trained** — the pipeline takes census data, trains a machine learning model, checks its accuracy, and files it in a "model registry" waiting for sign-off.
+3. **A human approves the model** — you review the model in AWS and click "Approve" (this is the one manual gate, on purpose).
+4. **The model goes live automatically** — approval triggers an automatic deployment to a web endpoint you can send data to and get predictions back.
+
+That's the whole loop: **push → train → approve → deploy**, with no manual AWS clicking except the deliberate approval step.
+
+---
+
+## Architecture at a Glance
 
 ```
-git push origin master
-        │
-        ▼
-┌─────────────────────────────────────┐
-│  Pipeline 1 — Infra                  │
-│  (infra-pipeline.yml)                │
-│                                       │
-│  • Creates SageMaker Studio domain   │
-│  • Creates IAM execution role        │
-│  • Creates S3 bucket                 │
-│  • Creates EventBridge rule          │
-│  • Creates Lambda auto-deploy trigger│
-└───────────────┬───────────────────────┘
-                │ workflow_run (auto)
-                ▼
-┌─────────────────────────────────────┐
-│  Pipeline 2 — ML                     │
-│  (sagemaker-pipeline.yml)            │
-│                                       │
-│  • Uploads dataset to S3 (via code)  │
-│  • DataPreparation (train/test split)│
-│  • ModelTraining (Spot instance)     │
-│  • ModelEvaluation                   │
-│  • QualityGate (accuracy ≥ 0.75)     │
-│  • ModelRegistration (Pending)       │
-└───────────────┬───────────────────────┘
-                │
-                ▼
-      ┌───────────────────┐
-      │  Manual Approval    │
-      │  (SageMaker Model   │
-      │   Registry)          │
-      └─────────┬───────────┘
-                │ EventBridge detects approval
-                ▼
-┌─────────────────────────────────────┐
-│  Pipeline 3 — Deploy                 │
-│  (deploy-pipeline.yml)               │
-│                                       │
-│  • Triggered automatically via       │
-│    EventBridge → Lambda → GitHub API │
-│  • Deploys to real-time endpoint     │
-│  • Tests predictions (CSV + JSON)    │
-└───────────────────────────────────────┘
+                          git push origin master
+                                    │
+                                    ▼
+                  ┌─────────────────────────────────────┐
+                  │  PIPELINE 1 — INFRASTRUCTURE (CDK)   │
+                  │  infra-pipeline.yml                  │
+                  │                                       │
+                  │  Runs: cdk deploy                    │
+                  │  Creates / imports:                  │
+                  │    • S3 Bucket                       │
+                  │    • SageMaker Studio Domain         │
+                  │    • IAM Roles                       │
+                  │    • Lambda function                 │
+                  │    • EventBridge rule                │
+                  └──────────────────┬────────────────────┘
+                                     │ auto-triggers (workflow_run)
+                                     ▼
+                  ┌─────────────────────────────────────┐
+                  │  PIPELINE 2 — MACHINE LEARNING       │
+                  │  sagemaker-pipeline.yml              │
+                  │                                       │
+                  │  Runs: run_pipeline.py               │
+                  │  5 steps inside SageMaker:           │
+                  │    1. Upload data to S3              │
+                  │    2. Split train/test               │
+                  │    3. Train model (Spot instance)    │
+                  │    4. Evaluate + Quality Gate        │
+                  │    5. Register model (Pending)       │
+                  └──────────────────┬────────────────────┘
+                                     │
+                                     ▼
+                        ┌────────────────────────┐
+                        │   HUMAN APPROVAL         │
+                        │   (SageMaker Registry)   │
+                        │   You click "Approve"    │
+                        └───────────┬──────────────┘
+                                    │ EventBridge detects approval
+                                    ▼
+                  ┌─────────────────────────────────────┐
+                  │  PIPELINE 3 — DEPLOYMENT             │
+                  │  deploy-pipeline.yml                 │
+                  │                                       │
+                  │  Triggered by: EventBridge → Lambda  │
+                  │                → GitHub API          │
+                  │  Runs: deploy_endpoint.py            │
+                  │    • Deploys model to endpoint       │
+                  │    • Tests predictions               │
+                  └───────────────────────────────────────┘
+                                     │
+                                     ▼
+                        Live endpoint returns predictions
+                        (CSV or JSON, via Studio or code)
 ```
 
 ---
@@ -62,139 +83,139 @@ git push origin master
 ```
 adult-income-sagemaker/
 │
-├── .github/workflows/
-│   ├── infra-pipeline.yml        # Pipeline 1 — creates AWS infrastructure
-│   ├── sagemaker-pipeline.yml    # Pipeline 2 — trains and registers model
-│   └── deploy-pipeline.yml       # Pipeline 3 — deploys to endpoint
+├── .github/workflows/              ← The 3 automation pipelines
+│   ├── infra-pipeline.yml          ← Pipeline 1: builds AWS infra via CDK
+│   ├── sagemaker-pipeline.yml      ← Pipeline 2: trains & registers model
+│   └── deploy-pipeline.yml         ← Pipeline 3: deploys approved model
 │
-├── infra/
-│   ├── create_studio.py          # Creates SageMaker Studio domain, IAM role, S3 bucket
-│   └── setup_eventbridge.py      # Creates EventBridge rule + Lambda auto-deploy trigger
+├── cdk/                            ← Infrastructure as Code (AWS CDK)
+│   ├── app.py                      ← CDK entry point
+│   ├── adult_income_stack.py       ← Defines ALL AWS resources
+│   ├── save_outputs.py             ← Saves infra details to S3
+│   ├── cdk.json                    ← CDK configuration
+│   └── requirements.txt            ← CDK Python dependencies
 │
-├── pipeline/
-│   ├── preprocessing.py          # Train/test split (SageMaker Processing step)
-│   ├── train.py                  # Model training + inference handlers (model_fn,
-│   │                              #   input_fn, predict_fn, output_fn)
-│   └── evaluate.py               # Model evaluation, writes evaluation.json
+├── infra/                          ← RETIRED boto3 scripts (kept for teaching)
+│   ├── create_studio.py            ← "Before CDK" version
+│   └── setup_eventbridge.py        ← "Before CDK" version
+│
+├── pipeline/                       ← The ML code
+│   ├── preprocessing.py            ← Splits data into train/test
+│   ├── train.py                    ← Trains model + inference handlers
+│   └── evaluate.py                 ← Scores model, writes metrics
 │
 ├── deploy/
-│   └── deploy_endpoint.py        # Deploys approved model to a real-time endpoint
+│   └── deploy_endpoint.py          ← Deploys approved model to endpoint
 │
 ├── data/
-│   └── adult_final.csv           # Pre-processed Adult Income dataset (committed to repo)
+│   └── adult_final.csv             ← The dataset (committed to repo)
 │
-├── run_pipeline.py               # Defines and triggers the SageMaker ML Pipeline
-├── requirements.txt
-└── .gitignore
+├── run_pipeline.py                 ← Defines the SageMaker ML pipeline
+├── requirements.txt                ← Main Python dependencies
+├── README.md                       ← This file
+└── DOCUMENTATION.md                ← Detailed file-by-file walkthrough
 ```
 
 ---
 
-## Dataset
+## The Dataset
 
-**Source:** [UCI Machine Learning Repository — Adult (Census Income)](https://archive.ics.uci.edu/dataset/2/adult)
-**Mirror used:** `jbrownlee/Datasets` (GitHub)
-**Size:** 2,000 rows, balanced (1,000 positive / 1,000 negative), sampled from the full 45,222-row cleaned dataset
-**License:** Public domain / open for research and educational use
+**Source:** UCI Machine Learning Repository — Adult (Census Income) dataset
+**Size used:** 2,000 rows, balanced (1,000 earning >$50K, 1,000 earning ≤$50K)
 
-### Features (after preprocessing)
+Each row describes a person with these 7 features, and 1 target:
 
-| Column | Description |
-|---|---|
-| `age` | Age in years |
-| `education_num` | Years of education |
-| `hours_per_week` | Hours worked per week |
-| `capital_gain` | Capital gains |
-| `capital_loss` | Capital losses |
-| `sex_male` | 1 = Male, 0 = Female |
-| `is_married` | 1 = Married, 0 = Not married |
-| `income_above_50k` | **Target** — 1 = income >$50K, 0 = income ≤$50K |
-
-The dataset is committed directly to the repository (`data/adult_final.csv`) and uploaded to S3 programmatically by `run_pipeline.py` — no manual upload step is ever required, making the entire pipeline reproducible from a clean clone.
+| Feature | Meaning | Example |
+|---|---|---|
+| `age` | Age in years | 39 |
+| `education_num` | Years of education | 13 (Bachelor's) |
+| `hours_per_week` | Weekly work hours | 40 |
+| `capital_gain` | Investment gains | 2174 |
+| `capital_loss` | Investment losses | 0 |
+| `sex_male` | 1 = male, 0 = female | 1 |
+| `is_married` | 1 = married, 0 = not | 0 |
+| **`income_above_50k`** | **TARGET: 1 = >$50K, 0 = ≤$50K** | **1** |
 
 ---
 
 ## Prerequisites
 
-- AWS account with permissions to create: SageMaker resources, IAM roles, S3 buckets, Lambda functions, EventBridge rules, Secrets Manager secrets
-- GitHub repository with Actions enabled
-- A GitHub Personal Access Token (scopes: `repo`, `workflow`) stored in AWS Secrets Manager as `github-token`
+Before you begin, you need:
+
+- **An AWS account** with permissions for SageMaker, S3, IAM, Lambda, EventBridge, CloudFormation, Secrets Manager
+- **A GitHub account** and a repository for this code
+- **A GitHub Personal Access Token** (with `repo` and `workflow` scopes)
+- **AWS CLI** access (or CloudShell in the browser)
 
 ---
 
-## Setup
+## One-Time Setup
 
-### 1. Create an IAM user for GitHub Actions
-
-Attach a policy covering: `sagemaker:*`, S3 bucket/object actions, IAM role creation/PassRole, EventBridge rule management, Lambda function management, and CloudWatch Logs.
-
-### 2. Add GitHub repository secrets
-
-| Secret | Value |
-|---|---|
-| `AWS_ACCESS_KEY_ID` | IAM user access key |
-| `AWS_SECRET_ACCESS_KEY` | IAM user secret key |
-| `AWS_REGION` | e.g. `us-east-1` |
-| `AWS_ROLE_ARN` | SageMaker execution role ARN |
-
-### 3. Store the GitHub token in AWS Secrets Manager
+### Step 1 — Store your GitHub token in AWS Secrets Manager
 
 ```bash
 aws secretsmanager create-secret \
   --name github-token \
-  --secret-string "ghp_xxxxxxxxxxxxxxxxxxxx" \
+  --secret-string "ghp_YOUR_TOKEN_HERE" \
   --region us-east-1
 ```
 
-> Stored as **plaintext**, not JSON — the Lambda function reads `secret["SecretString"]` directly.
+> Stored as plain text (not JSON). The Lambda reads it directly.
 
-### 4. Update the repo reference inside the Lambda code
+### Step 2 — Add GitHub repository secrets
 
-In `infra/setup_eventbridge.py`, update:
+Go to your repo → **Settings → Secrets and variables → Actions**, and add:
+
+| Secret Name | Value |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | Your IAM user's access key |
+| `AWS_SECRET_ACCESS_KEY` | Your IAM user's secret key |
+| `AWS_REGION` | `us-east-1` |
+| `AWS_ROLE_ARN` | SageMaker execution role ARN |
+| `AWS_ACCOUNT_ID` | Your 12-digit AWS account number |
+
+### Step 3 — Update the GitHub repo name in the CDK stack
+
+In `cdk/app.py`, set your repo:
 
 ```python
-repo = "YOUR_GITHUB_USERNAME/adult-income-sagemaker"
+github_repo="YOUR_USERNAME/adult-income-sagemaker"
 ```
 
-### 5. Push to trigger the pipeline
+### Step 4 — Push
 
 ```bash
+git add .
+git commit -m "initial setup"
 git push origin master
 ```
 
-Pipeline 1 and Pipeline 2 will run automatically in sequence.
+Pipeline 1 and Pipeline 2 run automatically.
 
 ---
 
-## Approving a Model and Triggering Deployment
+## Approving a Model & Deploying
 
-1. After Pipeline 2 completes, go to **SageMaker Studio → Models → Logged → AdultIncomeGroup**
-2. Select the latest version → **Update Status → Approved**
-3. EventBridge detects the approval event and invokes the Lambda function
-4. The Lambda dispatches Pipeline 3 via the GitHub Actions API
-5. Pipeline 3 deploys the model to `adult-income-predictor-endpoint`
-
-> **One-time setup note:** GitHub's `workflow_dispatch` API returns a 404 until a workflow file has been indexed at least once. `deploy-pipeline.yml` includes a path-filtered `push` trigger (combined with an `if` condition that prevents it from actually executing on push) solely to register the workflow with GitHub's API immediately on first push — this avoids requiring a manual "Run workflow" click before the first automated trigger works.
+1. Wait for Pipeline 2 to finish (green check in GitHub Actions)
+2. Open **SageMaker Studio → Models → AdultIncomeGroup**
+3. Select the latest version → **Update status → Approved**
+4. Deployment (Pipeline 3) triggers automatically within ~30 seconds
 
 ---
 
-## Testing the Deployed Endpoint
+## Testing the Live Endpoint
 
-### Via AWS CLI / CloudShell
+### From SageMaker Studio Playground
 
-**CSV:**
-```bash
-echo -n "39,13,40,2174,0,1,0" > input.csv
-aws sagemaker-runtime invoke-endpoint \
-  --endpoint-name adult-income-predictor-endpoint \
-  --content-type text/csv \
-  --body fileb://input.csv \
-  --region us-east-1 \
-  result.txt
-cat result.txt
+```
+Endpoint → Playground
+Content type: application/json
+Body: {"instances": [[39, 13, 40, 2174, 0, 1, 0]]}
+Result: {"predictions": [1]}   ← 1 means income > $50K
 ```
 
-**JSON:**
+### From the command line (CloudShell)
+
 ```bash
 echo -n '{"instances": [[39, 13, 40, 2174, 0, 1, 0]]}' > input.json
 aws sagemaker-runtime invoke-endpoint \
@@ -204,49 +225,49 @@ aws sagemaker-runtime invoke-endpoint \
   --region us-east-1 \
   result.json
 cat result.json
-# {"predictions": [1]}
 ```
-
-### Via SageMaker Studio Playground
-
-```
-Endpoints → adult-income-predictor-endpoint → Playground
-Content type: application/json
-Body: {"instances": [[39, 13, 40, 2174, 0, 1, 0]]}
-```
-
-The endpoint's `output_fn` explicitly returns a `(body, content_type)` tuple, which sets the correct `application/json` response header — required for Studio's Playground panel to render the prediction inline rather than showing "Content type is not supported for display."
 
 ---
 
-## Cost Reference
+## Cost Summary
 
-| Component | Approx. Cost |
+| Item | Cost |
 |---|---|
-| Full pipeline run (DataPrep + Train + Eval + Deploy setup) | ~$0.025 (~₹2) per run |
-| Model training (`ml.m5.large`, Spot) | Up to ~90% cheaper than On-Demand |
-| **Endpoint left running 24/7** | **~$82.80/month (~₹6,900/month)** |
-| S3 storage (dataset + artifacts) | ~$0.01/month |
+| One full pipeline run (train + deploy) | ~$0.025 (~₹2) |
+| Model training (Spot instance) | Up to 90% cheaper than normal |
+| **Live endpoint running 24/7** | **~$82.80/month (~₹6,900)** |
+| S3 storage | ~$0.01/month |
 
-> **The dominant cost driver is a forgotten live endpoint, not pipeline execution.** Always delete the endpoint after testing if it isn't serving production traffic:
+> **The endpoint is the big cost.** Always delete it after testing:
 > ```bash
-> aws sagemaker delete-endpoint --endpoint-name adult-income-predictor-endpoint --region us-east-1
+> aws sagemaker delete-endpoint \
+>   --endpoint-name adult-income-predictor-endpoint \
+>   --region us-east-1
 > ```
 
 ---
 
-## Key Design Decisions
+## Why AWS CDK (Not Plain Scripts)?
 
-- **Binary classification, not multi-class** — predicting `income_above_50k` (1/0) rather than any multi-category target keeps the problem well-posed for a small dataset.
-- **Spot instances for training only** — SageMaker Processing jobs do not support Spot; only `TrainingStep` does, so DataPreparation and Evaluation run on On-Demand `ml.t3.medium`.
-- **Quality gate before registration** — a `ConditionStep` checks evaluation accuracy (≥ 0.75) before allowing `RegisterModel` to run, preventing underperforming models from ever reaching the registry.
-- **Manual approval gate before deployment** — models are never auto-deployed; a human must explicitly approve in SageMaker Model Registry, which then triggers deployment automatically via EventBridge.
-- **Code-based S3 sync, not manual upload** — the dataset is committed to the repo and uploaded via `boto3` inside `run_pipeline.py`, making the entire system reproducible from a fresh clone with zero manual AWS console steps.
-- **Explicit `model_fn` / `input_fn` / `predict_fn` / `output_fn`** — required for the SKLearn serving container to correctly handle real-time inference requests (the default container otherwise fails on raw CSV row shaping and JSON content-type negotiation).
+This project uses **AWS CDK** for infrastructure instead of raw boto3 scripts because CDK provides:
+
+- **State tracking** — knows what already exists, won't duplicate
+- **Preview changes** — `cdk diff` shows what will change before it happens
+- **Automatic rollback** — if deployment fails, it cleanly reverts
+- **One-command teardown** — `cdk destroy` removes everything
+- **Dependency ordering** — figures out what to create first, automatically
+
+The old boto3 scripts are kept in `infra/` as a teaching reference showing the "before CDK" approach.
+
+---
+
+## Full Documentation
+
+For a detailed, file-by-file explanation of how everything works — including the debugging issues we solved and why each design choice was made — see **DOCUMENTATION.md**.
 
 ---
 
 ## License
 
-Dataset: UCI Machine Learning Repository (Adult / Census Income), public domain for research and educational use.
-Code: MIT (or your preferred license).
+Dataset: UCI Machine Learning Repository (public domain, research/educational use).
+Code: MIT.
